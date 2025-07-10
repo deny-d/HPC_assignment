@@ -1,4 +1,4 @@
-#HPC_Assignement
+# HPC_Assignement
 
 ## AddNoise.sh
 In the directory "../input/reference" with respect to the one you run this script, load all the files you want to add Noise. 
