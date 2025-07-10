@@ -1,6 +1,8 @@
 #!/bin/bash
-
-SRC="main-v2.c"
+#the code was run on aws since we had problems to run mpi on the server 
+#and since the cpu were not enough to do performance evaluation due to the 
+#nature of the implemented algorithm
+SRC ="main-v2.c"
 BASE_EXE="main-v2"
 
 MATRIX_SIZES=(500 1000 2000)
