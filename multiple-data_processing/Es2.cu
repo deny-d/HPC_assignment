@@ -6,8 +6,9 @@
 #include <cuda_runtime.h>
 #include <string> 
 #include <fstream>
-#define TILE_DIM 16  // Dimensione del blocco di thread (es. 16x16)
-#define HALO_SIZE 1  // Dimensione dell'halo per un kernel 3x
+#define TILE_DIM 16  // Block Thread Dimension
+#define HALO_SIZE 1  // Halo size, how much columns/rows of pixels to load around the tile 
+                     // 1 because the filter is 3x3
 
 
 /*----------------------------------------------------------------------------------------------------------------------------------------
@@ -42,10 +43,10 @@ cv::Mat createG_x_y_Matrix(int channelId, float* gxy, int C, int R){
 
 ------------------------------------------------------------------------------------------------------------------------------------------*/
 
-__global__ void g_x_y_calculation(float *channel, float *gxy, int CH, int R, int CO){
+__global__ void g_x_y_calculation(float *channel, float *gxy, int R, int CO){
 
     // shared tile memory declaration 
-    __shared__ float tile[TILE_DIM + 2 * HALO_SIZE * TILE_DIM][TILE_DIM + 2 * HALO_SIZE * TILE_DIM;
+    __shared__ float tile[TILE_DIM + 2 * HALO_SIZE][TILE_DIM + 2 * HALO_SIZE]; //2 * HALO_SIZE, 1 for right/up and the other for left/down
 
     // index calculation
     int tx = threadIdx.x;
@@ -53,24 +54,25 @@ __global__ void g_x_y_calculation(float *channel, float *gxy, int CH, int R, int
     int z = blockIdx.z;
 
     // Global output and input coordinates for the pixel taken into account
+    //x_out is the place where the thread will write the result
     int x_out = blockIdx.x * TILE_DIM + tx;
     int y_out = blockIdx.y * TILE_DIM + ty;
 
-    int x_in = x_out - HALO_SIZE;
-    int y_in = y_out - HALO_SIZE;
-
-// Load the tile with the data from the channel
+    //x_in is the place where the thread will read the data from
+    //Both initialized to the center pixel
     int x_in = x_out;
     int y_in = y_out;
+
+    // Load the tile with the data from the channel
     if (x_in < CO && y_in < R) {
         tile[ty + HALO_SIZE][tx + HALO_SIZE] = channel[z * (R * CO) + y_in * CO + x_in];
     } else {
         tile[ty + HALO_SIZE][tx + HALO_SIZE] = 0.0f;
     }
 
-    if (tx < HALO_SIZE) {
+    if (tx < HALO_SIZE) { //Only these specifics threads (close to the start/end) will load the left and right halo
         // Load the left halo
-        x_in = x_out - TILE_DIM;
+        x_in = x_out - HALO_SIZE;
         if (x_in >= 0 && y_in < R) {
             tile[ty + HALO_SIZE][tx] = channel[z * (R * CO) + y_in * CO + x_in];
         } else {
@@ -86,9 +88,9 @@ __global__ void g_x_y_calculation(float *channel, float *gxy, int CH, int R, int
     }
 
 
-    if (ty < HALO_SIZE) {
-        // CLoad upper halo
-        y_in = y_out - TILE_DIM;
+    if (ty < HALO_SIZE) { //Only these specifics threads (close to the start/end) will load the upper and lower halo
+        // Load upper halo
+        y_in = y_out - HALO_SIZE;
         if (y_in >= 0 && x_out < CO) {
             tile[ty][tx + HALO_SIZE] = channel[z * (R * CO) + y_in * CO + x_out];
         } else {
@@ -106,24 +108,36 @@ __global__ void g_x_y_calculation(float *channel, float *gxy, int CH, int R, int
     // Load corners
     if (tx < HALO_SIZE && ty < HALO_SIZE) {
         // up left
-        x_in = x_out - TILE_DIM;
-        y_in = y_out - TILE_DIM;
-        if (x_in >= 0 && y_in >= 0) tile[ty][tx] = channel[z * (R * CO) + y_in * CO + x_in]; else tile[ty][tx] = 0.0f;
-        
+        x_in = x_out - HALO_SIZE;
+        y_in = y_out - HALO_SIZE;
+        if (x_in >= 0 && y_in >= 0) 
+            tile[ty][tx] = channel[z * (R * CO) + y_in * CO + x_in]; 
+        else 
+            tile[ty][tx] = 0.0f;
+
         // up right
         x_in = x_out + TILE_DIM;
-        y_in = y_out - TILE_DIM;
-        if (x_in < CO && y_in >= 0) tile[ty][tx + TILE_DIM + HALO_SIZE] = channel[z * (R * CO) + y_in * CO + x_in]; else tile[ty][tx + TILE_DIM + HALO_SIZE] = 0.0f;
+        y_in = y_out - HALO_SIZE;
+        if (x_in < CO && y_in >= 0) 
+            tile[ty][tx + TILE_DIM + HALO_SIZE] = channel[z * (R * CO) + y_in * CO + x_in]; 
+        else 
+            tile[ty][tx + TILE_DIM + HALO_SIZE] = 0.0f;
 
         // low left
-        x_in = x_out - TILE_DIM;
+        x_in = x_out - HALO_SIZE;
         y_in = y_out + TILE_DIM;
-        if (x_in >= 0 && y_in < R) tile[ty + TILE_DIM + HALO_SIZE][tx] = channel[z * (R * CO) + y_in * CO + x_in]; else tile[ty + TILE_DIM + HALO_SIZE][tx] = 0.0f;
+        if (x_in >= 0 && y_in < R) 
+            tile[ty + TILE_DIM + HALO_SIZE][tx] = channel[z * (R * CO) + y_in * CO + x_in]; 
+        else 
+            tile[ty + TILE_DIM + HALO_SIZE][tx] = 0.0f;
 
         // low right
         x_in = x_out + TILE_DIM;
         y_in = y_out + TILE_DIM;
-        if (x_in < CO && y_in < R) tile[ty + TILE_DIM + HALO_SIZE][tx + TILE_DIM + HALO_SIZE] = channel[z * (R * CO) + y_in * CO + x_in]; else tile[ty + TILE_DIM + HALO_SIZE][tx + TILE_DIM + HALO_SIZE] = 0.0f;
+        if (x_in < CO && y_in < R) 
+            tile[ty + TILE_DIM + HALO_SIZE][tx + TILE_DIM + HALO_SIZE] = channel[z * (R * CO) + y_in * CO + x_in]; 
+        else 
+            tile[ty + TILE_DIM + HALO_SIZE][tx + TILE_DIM + HALO_SIZE] = 0.0f;
     }
 
     //Thread sync to be sure all threads have written to the tile
@@ -237,7 +251,7 @@ cv::Mat GetResult(std::string imagePath, std::ofstream &logFile) {
 
     // Launch the kernel to calculate gxy for each channel
     cudaEventRecord(start_event);
-    g_x_y_calculation<<<numBlocks, threadsPerBlock>>>(channel, gxy, 3, channels[0].rows, channels[0].cols);
+    g_x_y_calculation<<<numBlocks, threadsPerBlock>>>(channel, gxy, channels[0].rows, channels[0].cols);
     cudaEventRecord(stop_event);
     cudaEventSynchronize(stop_event);
 
